@@ -1,0 +1,29 @@
+# Data and outputs
+data/
+logs/
+manifest.db
+manifest.db-journal
+*.mp4
+*.m4a
+*.webm
+*.jpg
+*.png
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+env/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Config secrets
+cookies.txt
+config.local.yaml
+
+# IDEs
+.vscode/
+.idea/
