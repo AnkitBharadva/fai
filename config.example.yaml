@@ -1,0 +1,28 @@
+# Configuration for YouTube Video Scraper
+
+# Directory paths
+data_dir: "./data"
+db_path: "manifest.db"
+log_dir: "./logs"
+
+# Performance & Rate Limiting
+workers: 2
+rate_limit_delay: 1.5  # Seconds of delay/jitter between requests
+retry_count: 3
+
+# Download Settings
+download_video: true
+audio_only: false
+quality_ceiling: "1080p"  # e.g., 720p, 1080p, 4k, or max
+download_thumbnail: true
+cookies_file: null       # Path to cookies.txt if age-restricted/member video
+
+# Content Extraction
+max_comments: null       # null = no cap (extract all comments)
+subtitle_languages:
+  - "en"
+  - "auto"
+prefer_manual_subtitles: true
+
+# Logging
+log_level: "INFO"

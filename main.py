@@ -1,0 +1,114 @@
+"""CLI entrypoint for YouTube Video Scraper."""
+
+from typing import List, Optional, Tuple
+import click
+from rich.console import Console
+from rich.table import Table
+
+from src.config_loader import load_config, merge_config_with_cli
+from src.db import ManifestDB
+from src.orchestrator import ScrapingOrchestrator
+
+console = Console()
+
+
+@click.group()
+def cli():
+    """Production-grade YouTube Video Scraper CLI."""
+    pass
+
+
+@cli.command()
+@click.option("--url", "-u", multiple=True, help="YouTube video URL or video ID (can specify multiple).")
+@click.option("--channel", "-c", help="YouTube channel URL.")
+@click.option("--playlist", "-p", help="YouTube playlist URL.")
+@click.option("--file", "-f", help="Path to text file containing YouTube URLs/IDs (one per line).")
+@click.option("--max-videos", type=int, help="Maximum number of videos to process.")
+@click.option("--workers", "-w", type=int, help="Number of parallel worker threads.")
+@click.option("--force", is_flag=True, default=False, help="Force re-scraping even if marked completed in manifest.")
+@click.option("--skip-download", is_flag=True, default=False, help="Skip downloading video stream.")
+@click.option("--max-comments", type=int, help="Maximum comments to extract per video (default: unlimited).")
+@click.option("--config", help="Path to custom config.yaml file.")
+def scrape(
+    url: Tuple[str, ...],
+    channel: Optional[str],
+    playlist: Optional[str],
+    file: Optional[str],
+    max_videos: Optional[int],
+    workers: Optional[int],
+    force: bool,
+    skip_download: bool,
+    max_comments: Optional[int],
+    config: Optional[str],
+):
+    """Scrape videos, metadata, descriptions, transcripts, and comments."""
+    cfg = load_config(config or "config.yaml")
+
+    cli_overrides = {}
+    if workers is not None:
+        cli_overrides["workers"] = workers
+    if skip_download:
+        cli_overrides["download_video"] = False
+    if max_comments is not None:
+        cli_overrides["max_comments"] = max_comments
+
+    final_cfg = merge_config_with_cli(cfg, **cli_overrides)
+    orchestrator = ScrapingOrchestrator(final_cfg)
+
+    url_list = list(url) if url else None
+    orchestrator.run(
+        urls=url_list,
+        file_path=file,
+        channel_url=channel,
+        playlist_url=playlist,
+        max_videos=max_videos,
+        workers=workers,
+        force=force,
+    )
+
+
+@cli.command()
+@click.option("--config", help="Path to custom config.yaml file.")
+def status(config: Optional[str]):
+    """Show manifest database status summary."""
+    cfg = load_config(config or "config.yaml")
+    db = ManifestDB(cfg.get("db_path", "manifest.db"))
+    records = db.get_all()
+
+    table = Table(title="YouTube Scraper Manifest Status Summary")
+    table.add_column("Status", style="bold cyan")
+    table.add_column("Count", style="bold green")
+
+    status_counts = {"pending": 0, "in_progress": 0, "done": 0, "failed": 0}
+    for r in records:
+        status_counts[r.status] = status_counts.get(r.status, 0) + 1
+
+    for st, count in status_counts.items():
+        table.add_row(st.capitalize(), str(count))
+
+    console.print(table)
+    console.print(f"\n[bold]Total Tracked Videos:[/bold] {len(records)}")
+
+
+@cli.command()
+@click.option("--workers", "-w", type=int, help="Number of parallel worker threads.")
+@click.option("--config", help="Path to custom config.yaml file.")
+def retry_failed(workers: Optional[int], config: Optional[str]):
+    """Retry all videos marked as failed in the manifest."""
+    cfg = load_config(config or "config.yaml")
+    db = ManifestDB(cfg.get("db_path", "manifest.db"))
+    failed_records = db.get_failed()
+
+    if not failed_records:
+        console.print("[bold green]No failed videos to retry![/bold green]")
+        return
+
+    failed_ids = [r.video_id for r in failed_records]
+    console.print(f"[bold yellow]Retrying {len(failed_ids)} failed video(s)...[/bold yellow]")
+
+    orchestrator = ScrapingOrchestrator(cfg)
+    orchestrator.run(urls=failed_ids, workers=workers, force=True)
+
+
+if __name__ == "__main__":
+    cli()
