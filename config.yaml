@@ -13,9 +13,17 @@ retry_count: 3
 # Download Settings
 download_video: true
 audio_only: false
-quality_ceiling: "1080p"  # e.g., 720p, 1080p, 4k, or max
+quality_ceiling: "1080p"  # e.g., 144p, 360p, 480p, 720p, 1080p, 4k, best, worst
 download_thumbnail: true
 cookies_file: null       # Path to cookies.txt if age-restricted/member video
+
+# Audio Extraction
+extract_audio: true      # Extract high-quality audio track in a separate audio folder
+audio_format: "mp3"      # Target audio format (mp3, m4a, wav, flac)
+
+# Frame Extraction (FFmpeg)
+extract_frames: false    # Set to true to extract image frames from downloaded videos
+frame_skip: 10           # Extract 1 frame every N frames (e.g., 1 = all frames, 10 = 1 frame per 10 frames)
 
 # Content Extraction
 max_comments: null       # null = no cap (extract all comments)

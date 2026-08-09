@@ -31,6 +31,8 @@ class FolderOrganizer:
             "transcript": base_dir / "transcript",
             "comments": base_dir / "comments",
             "thumbnails": base_dir / "thumbnails",
+            "frames": base_dir / "frames",
+            "audio": base_dir / "audio",
         }
         for d in dirs.values():
             d.mkdir(parents=True, exist_ok=True)

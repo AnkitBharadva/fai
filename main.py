@@ -23,6 +23,11 @@ def cli():
 @click.option("--channel", "-c", help="YouTube channel URL.")
 @click.option("--playlist", "-p", help="YouTube playlist URL.")
 @click.option("--file", "-f", help="Path to text file containing YouTube URLs/IDs (one per line).")
+@click.option("--quality", "-q", "--resolution", help="Target video resolution/quality (e.g. 144p, 360p, 480p, 720p, 1080p, 4k, best, worst).")
+@click.option("--extract-frames", is_flag=True, default=False, help="Extract video frames using ffmpeg.")
+@click.option("--frame-skip", type=int, help="Number of frames to skip during frame extraction (e.g., 10 = extract 1 frame every 10 frames).")
+@click.option("--extract-audio/--skip-audio", default=True, help="Extract high-quality audio track into separate audio folder (default: True).")
+@click.option("--audio-format", default="mp3", help="Target audio format (mp3, m4a, wav, flac). Default: mp3.")
 @click.option("--max-videos", type=int, help="Maximum number of videos to process.")
 @click.option("--workers", "-w", type=int, help="Number of parallel worker threads.")
 @click.option("--force", is_flag=True, default=False, help="Force re-scraping even if marked completed in manifest.")
@@ -34,6 +39,11 @@ def scrape(
     channel: Optional[str],
     playlist: Optional[str],
     file: Optional[str],
+    quality: Optional[str],
+    extract_frames: bool,
+    frame_skip: Optional[int],
+    extract_audio: bool,
+    audio_format: str,
     max_videos: Optional[int],
     workers: Optional[int],
     force: bool,
@@ -41,7 +51,7 @@ def scrape(
     max_comments: Optional[int],
     config: Optional[str],
 ):
-    """Scrape videos, metadata, descriptions, transcripts, and comments."""
+    """Scrape videos, metadata, descriptions, transcripts, comments, audio, and extract frames."""
     cfg = load_config(config or "config.yaml")
 
     cli_overrides = {}
@@ -51,6 +61,17 @@ def scrape(
         cli_overrides["download_video"] = False
     if max_comments is not None:
         cli_overrides["max_comments"] = max_comments
+    if quality is not None:
+        cli_overrides["quality_ceiling"] = quality
+    if extract_frames:
+        cli_overrides["extract_frames"] = True
+    if frame_skip is not None:
+        cli_overrides["extract_frames"] = True
+        cli_overrides["frame_skip"] = frame_skip
+    if extract_audio is not None:
+        cli_overrides["extract_audio"] = extract_audio
+    if audio_format:
+        cli_overrides["audio_format"] = audio_format
 
     final_cfg = merge_config_with_cli(cfg, **cli_overrides)
     orchestrator = ScrapingOrchestrator(final_cfg)

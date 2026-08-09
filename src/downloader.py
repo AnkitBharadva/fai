@@ -1,9 +1,11 @@
-"""Video and thumbnail downloader module using yt-dlp Python API."""
+"""Video, thumbnail, frame extraction, and high-quality audio downloader module."""
 
+import re
 import shutil
+import subprocess
 import urllib.request
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 import yt_dlp
 
 
@@ -28,7 +30,7 @@ def get_ffmpeg_path() -> Optional[str]:
 
 
 class VideoDownloader:
-    """Handles downloading YouTube videos and thumbnails."""
+    """Handles downloading YouTube videos, thumbnails, frame extraction, and audio extraction."""
 
     def __init__(
         self,
@@ -36,7 +38,7 @@ class VideoDownloader:
         audio_only: bool = False,
         cookies_file: Optional[str] = None,
     ):
-        self.quality_ceiling = quality_ceiling.lower()
+        self.quality_ceiling = str(quality_ceiling).strip().lower()
         self.audio_only = audio_only
         self.cookies_file = cookies_file
         self.ffmpeg_path = get_ffmpeg_path()
@@ -49,17 +51,31 @@ class VideoDownloader:
             # Without ffmpeg, yt-dlp cannot merge video+audio streams, so request single best format
             return "best[ext=mp4]/best"
 
-        if self.quality_ceiling == "720p":
-            return "bestvideo[height<=720]+bestaudio/best[height<=720]/best"
-        elif self.quality_ceiling in ["1080p", "1080"]:
-            return "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best"
-        elif self.quality_ceiling in ["4k", "2160p"]:
-            return "bestvideo[height<=2160]+bestaudio/best[height<=2160]/best"
-        else:
+        qc = self.quality_ceiling
+
+        # Special keywords
+        if qc in ["best", "max", "highest", "uncapped"]:
             return "bestvideo+bestaudio/best"
+        elif qc in ["worst", "min", "lowest"]:
+            return "worstvideo+worstaudio/worst"
+
+        # Parse target resolution height (e.g. 144, 240, 360, 480, 720, 1080, 1440, 2160, 4k, 2k)
+        if qc == "4k":
+            height = 2160
+        elif qc == "2k":
+            height = 1440
+        else:
+            match = re.search(r"(\d+)", qc)
+            height = int(match.group(1)) if match else None
+
+        if height:
+            return f"bestvideo[height<={height}]+bestaudio/best[height<={height}]/best"
+
+        # If user passed custom yt-dlp format selector string directly
+        return self.quality_ceiling
 
     def download_video(self, video_url: str, output_dir: Path, video_id: str) -> Path:
-        """Download video at best available quality up to quality ceiling into target dir."""
+        """Download video at target quality into target dir."""
         output_dir.mkdir(parents=True, exist_ok=True)
         outtmpl = str(output_dir / f"{video_id}.%(ext)s")
 
@@ -102,3 +118,104 @@ class VideoDownloader:
             return out_path
         except Exception:
             return None
+
+    def extract_frames(self, video_file: Path, output_dir: Path, frame_skip: int = 1) -> List[Path]:
+        """Extract frame images from downloaded video using ffmpeg.
+
+        Args:
+            video_file: Path to downloaded video file.
+            output_dir: Output directory to store frame files.
+            frame_skip: Extract 1 frame every N frames (1 = extract all frames, 10 = extract 1 frame every 10 frames).
+        """
+        if not self.ffmpeg_path:
+            raise RuntimeError("ffmpeg binary is required for frame extraction but was not found.")
+
+        if not video_file.exists():
+            raise FileNotFoundError(f"Video file not found for frame extraction: {video_file}")
+
+        output_dir.mkdir(parents=True, exist_ok=True)
+        frame_pattern = str(output_dir / "frame_%06d.jpg")
+
+        step = max(1, int(frame_skip))
+        vf_filter = f"select='not(mod(n\\,{step}))'"
+
+        cmd = [
+            self.ffmpeg_path,
+            "-y",
+            "-i", str(video_file),
+            "-vf", vf_filter,
+            "-vsync", "0",
+            frame_pattern,
+        ]
+
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if res.returncode != 0:
+            raise RuntimeError(f"FFmpeg frame extraction failed: {res.stderr}")
+
+        return sorted(list(output_dir.glob("frame_*.jpg")))
+
+    def extract_audio(
+        self,
+        video_file: Optional[Path],
+        output_dir: Path,
+        video_url: Optional[str] = None,
+        audio_format: str = "mp3",
+    ) -> Path:
+        """Extract high-quality audio into a separate audio folder.
+
+        Uses ffmpeg if video_file exists, or falls back to yt-dlp bestaudio download.
+        """
+        output_dir.mkdir(parents=True, exist_ok=True)
+        fmt = audio_format.lower().strip()
+        target_audio_file = output_dir / f"audio.{fmt}"
+
+        if self.ffmpeg_path and video_file and video_file.exists():
+            cmd = [
+                self.ffmpeg_path,
+                "-y",
+                "-i", str(video_file),
+                "-vn",
+            ]
+            if fmt == "mp3":
+                cmd.extend(["-acodec", "libmp3lame", "-q:a", "0"])
+            elif fmt in ["m4a", "aac"]:
+                cmd.extend(["-c:a", "copy"])
+            elif fmt == "wav":
+                cmd.extend(["-acodec", "pcm_s16le"])
+            else:
+                cmd.extend(["-q:a", "0"])
+
+            cmd.append(str(target_audio_file))
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            if res.returncode == 0 and target_audio_file.exists():
+                return target_audio_file
+
+        # Fallback: direct download best audio stream using yt-dlp
+        if video_url:
+            outtmpl = str(output_dir / "audio.%(ext)s")
+            opts: Dict[str, Any] = {
+                "quiet": True,
+                "no_warnings": True,
+                "format": "bestaudio/best",
+                "outtmpl": outtmpl,
+            }
+            if self.ffmpeg_path:
+                opts["ffmpeg_location"] = self.ffmpeg_path
+                opts["postprocessors"] = [
+                    {
+                        "key": "FFmpegExtractAudio",
+                        "preferredcodec": fmt if fmt in ["mp3", "m4a", "wav", "flac"] else "mp3",
+                        "preferredquality": "0",  # Highest VBR quality
+                    }
+                ]
+            if self.cookies_file and Path(self.cookies_file).exists():
+                opts["cookiefile"] = self.cookies_file
+
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                ydl.download([video_url])
+
+            audio_files = list(output_dir.glob("audio.*"))
+            if audio_files:
+                return audio_files[0]
+
+        raise RuntimeError("Could not extract audio track.")

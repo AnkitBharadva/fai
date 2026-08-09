@@ -75,12 +75,32 @@ class ScrapingOrchestrator:
                 status_info["components"]["thumbnail"] = "success"
 
             # 3. Video Download
+            downloaded_video = None
             if self.config.get("download_video", True):
                 self.logger.info(f"[{video_id}] Downloading video stream...")
-                self.downloader.download_video(video_url, dirs["video"], video_id)
+                downloaded_video = self.downloader.download_video(video_url, dirs["video"], video_id)
                 status_info["components"]["video"] = "success"
             else:
                 status_info["components"]["video"] = "skipped"
+
+            # 3b. Frame Extraction
+            if self.config.get("extract_frames", False) and downloaded_video:
+                frame_skip = self.config.get("frame_skip", 1)
+                self.logger.info(f"[{video_id}] Extracting frames (frame_skip={frame_skip})...")
+                extracted = self.downloader.extract_frames(downloaded_video, dirs["frames"], frame_skip=frame_skip)
+                status_info["components"]["frames"] = f"success ({len(extracted)} frames extracted)"
+
+            # 3c. Audio Extraction
+            if self.config.get("extract_audio", True):
+                fmt = self.config.get("audio_format", "mp3")
+                self.logger.info(f"[{video_id}] Extracting high quality audio ({fmt})...")
+                audio_file = self.downloader.extract_audio(
+                    video_file=downloaded_video,
+                    output_dir=dirs["audio"],
+                    video_url=video_url,
+                    audio_format=fmt,
+                )
+                status_info["components"]["audio"] = f"success ({audio_file.name})"
 
             # 4. Transcripts
             self.logger.info(f"[{video_id}] Fetching transcripts/captions...")

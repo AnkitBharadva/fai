@@ -11,6 +11,8 @@ def test_folder_organizer_structure():
         dirs = organizer.setup_video_dirs("UC12345", "vid999")
 
         assert dirs["video"].exists()
+        assert dirs["audio"].exists()
+        assert dirs["frames"].exists()
         assert dirs["metadata"].exists()
         assert dirs["transcript"].exists()
         assert dirs["comments"].exists()

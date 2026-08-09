@@ -1,26 +1,24 @@
 # YouTube Video Scraper & Archival Tool
 
-Production-grade, scalable YouTube video scraper and archival system built in Python using `yt-dlp` (via its native Python API), `Pydantic`, `SQLite`, `Click`, and `Rich`.
+Production-grade, scalable YouTube video scraper and archival system built in Python using `yt-dlp` (via its native Python API), `FFmpeg`, `Pydantic`, `SQLite`, `Click`, and `Rich`.
 
 ---
 
 ## Features
 
+- **Custom Resolution & Quality Selection**:
+  - Download videos in any specified resolution (e.g. `144p`, `240p`, `360p`, `480p`, `720p`, `1080p`, `1440p`, `4k`, `best`, `worst`).
+- **FFmpeg Frame Extraction**:
+  - Extract image frames directly from downloaded videos (`frames/frame_000001.jpg`).
+  - Configurable frame skip step (e.g., `--frame-skip 1` for all frames, `--frame-skip 10` for 1 frame every 10 frames, `--frame-skip 50` for 1 frame every 50 frames).
 - **Comprehensive Data Archival**:
-  - Video download (highest quality, MP4 merged container up to configurable resolution ceiling e.g. 1080p/4K).
   - High-res thumbnail download (`thumbnail.jpg`).
   - Full structured metadata validated via Pydantic (`video_metadata.json`).
   - Raw description (`description.txt`).
-  - Transcripts / Subtitles: Manual captions preferred with auto-generated fallback; exports raw `.srt`, `.vtt`, and clean NLP-ready `.txt` (`en_clean.txt`).
+  - Transcripts / Subtitles: Manual captions preferred with auto-generated & multi-language translation fallbacks; exports `.vtt`, `.srt`, `.json`, and clean NLP-ready `.txt`.
   - Complete comment threads including nested replies & author metadata (`comments.json`, `comments_threaded.json`, `comments.csv`).
 - **Resumability & Dedup**:
   - SQLite database manifest (`manifest.db`) tracks status (`pending`, `in_progress`, `done`, `failed`) per video.
-  - Interrupted batch runs pick up right where they left off without re-downloading or re-fetching completed data.
-- **Flexible Batch Input**:
-  - Accepts single video URLs, channel URLs, playlist URLs, or text files containing URL lists.
-- **Robustness**:
-  - Exponential backoff retry logic, worker concurrency limits, and jitter/delays to respect rate limits.
-  - Per-video `status.json` log and error isolation (a failure on one video does not break the batch).
 
 ---
 
@@ -32,6 +30,10 @@ data/
     └── {video_id}/
         ├── video/
         │   └── {video_id}.mp4
+        ├── frames/
+        │   ├── frame_000001.jpg
+        │   ├── frame_000002.jpg
+        │   └── ...
         ├── metadata/
         │   ├── video_metadata.json
         │   └── description.txt
@@ -66,33 +68,24 @@ logs/
    pip install -r requirements.txt
    ```
 
-3. **FFmpeg Note**:
-   `ffmpeg` is recommended on your system PATH for yt-dlp to merge high-resolution video and audio streams into `.mp4`. If `ffmpeg` is not present, yt-dlp will fall back to downloading single best combined streams.
-
 ---
 
-## Quick Start (CLI Usage)
+## CLI Usage Examples
 
 ```bash
-# 1. Scrape a single video URL
-python main.py scrape --url "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+# 1. Scrape a single video with custom resolution (e.g., 360p or 480p)
+python main.py scrape --url "https://www.youtube.com/watch?v=dQw4w9WgXcQ" --quality 360p
 
-# 2. Scrape an entire channel (capped at 50 videos)
-python main.py scrape --channel "https://www.youtube.com/@ChannelHandle" --max-videos 50
+# 2. Extract frames from video (e.g., 1 frame every 30 frames)
+python main.py scrape --url "https://www.youtube.com/watch?v=dQw4w9WgXcQ" --extract-frames --frame-skip 30
 
-# 3. Scrape a playlist with 4 worker threads
-python main.py scrape --playlist "https://www.youtube.com/playlist?list=PLAYLIST_ID" --workers 4
+# 3. Scrape an entire channel at 720p resolution
+python main.py scrape --channel "https://www.youtube.com/@ChannelHandle" --quality 720p --max-videos 50
 
-# 4. Scrape from a file containing URLs (one per line)
-python main.py scrape --file urls.txt
-
-# 5. Metadata/Comments/Transcripts only (skip video download)
-python main.py scrape --url "..." --skip-download
-
-# 6. Check database manifest summary
+# 4. Check database manifest summary
 python main.py status
 
-# 7. Retry all failed videos in the manifest
+# 5. Retry all failed videos in the manifest
 python main.py retry-failed
 ```
 
@@ -100,28 +93,24 @@ python main.py retry-failed
 
 ## Configuration (`config.yaml`)
 
-Configuration can be modified in `config.yaml` or overridden via CLI flags:
-
 ```yaml
 data_dir: "./data"
 db_path: "manifest.db"
 log_dir: "./logs"
 workers: 2
-rate_limit_delay: 1.5  # Seconds of delay/jitter between requests
+rate_limit_delay: 1.5
+
 download_video: true
-quality_ceiling: "1080p"
+quality_ceiling: "1080p"  # e.g., 144p, 360p, 480p, 720p, 1080p, 4k, best, worst
+
+extract_frames: false    # Set to true to enable FFmpeg frame extraction
+frame_skip: 10           # Extract 1 frame every N frames (e.g. 10)
+
+max_comments: null
 subtitle_languages:
   - "en"
   - "auto"
-max_comments: null     # null = unlimited / extract all comments
-cookies_file: null     # Path to cookies.txt if scraping age-restricted content
 ```
-
----
-
-## Compliance & Terms of Service Notice
-
-> **Important**: This tool should be used in compliance with YouTube's Terms of Service and applicable law. Built-in rate limiting and configurable delays are designed to ensure respectful, non-abusive client behavior. Always verify rights and fair use when archiving content.
 
 ---
 

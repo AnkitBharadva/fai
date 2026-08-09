@@ -19,7 +19,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "cookies_file": None,
     "max_comments": None,
     "subtitle_languages": ["en", "auto"],
-    "prefer_manual_subtitles": True,
+    "extract_frames": False,
+    "frame_skip": 1,
+    "extract_audio": True,
+    "audio_format": "mp3",
     "log_level": "INFO",
 }
 
