@@ -1,6 +1,8 @@
 # Data and outputs
 data/
 logs/
+outputs/
+downloads/
 manifest.db
 manifest.db-journal
 *.mp4
@@ -8,22 +10,57 @@ manifest.db-journal
 *.webm
 *.jpg
 *.png
+*.jpeg
+*.gif
+*.wav
+*.mkv
+*.avi
 
 # Python
 __pycache__/
 *.py[cod]
 *$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
 venv/
 .venv/
 env/
+ENV/
 .pytest_cache/
 .coverage
 htmlcov/
+.tox/
+*.log
 
 # Config secrets
+cookies/
 cookies.txt
 config.local.yaml
+config.yaml
+*.env
+.env
+.env.local
+secrets.json
+credentials.json
+*.key
+*.pem
 
 # IDEs
 .vscode/
 .idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# OS
+Thumbs.db
+desktop.ini
+
+# Temporary files
+*.tmp
+*.bak
+*.cache
