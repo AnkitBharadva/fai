@@ -23,6 +23,32 @@ Production-grade, scalable YouTube video scraper and archival system built with 
 
 ---
 
+## Installation
+
+1. Clone the repository:
+```bash
+git clone <your-repo-url>
+cd fai
+```
+
+2. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
+
+3. Configure your settings:
+```bash
+cp config.example.yaml config.yaml
+# Edit config.yaml with your preferences
+```
+
+4. Add your YouTube cookies (optional but recommended):
+   - Export cookies from your browser using a cookie extension
+   - Save as `.txt` files in the `cookies/` folder
+   - Files will be automatically rotated during scraping
+
+---
+
 ## Directory Structure
 
 ```
@@ -51,10 +77,10 @@ data/
         ├── thumbnails/
         │   └── thumbnail.jpg
         └── status.json
-cookies/
+cookies/          # ⚠️ Not tracked in git (contains sensitive auth data)
 ├── jaman.txt
 └── magan.txt
-manifest.db
+manifest.db       # Task queue database
 logs/
 └── scraper.log
 ```
@@ -86,11 +112,19 @@ python main.py consume --workers 4
 
 ## Cookies Management
 
-Cookie files uploaded to [`cookies/`](file:///D:/fai/cookies) (e.g. `jaman.txt` and `magan.txt`) are automatically detected and rotated round-robin across extraction calls.
+⚠️ **Security Note**: Cookie files contain sensitive authentication data and are excluded from git via `.gitignore`.
+
+Cookie files uploaded to `cookies/` (e.g. `jaman.txt` and `magan.txt`) are automatically detected and rotated round-robin across extraction calls.
+
+**How to export cookies:**
+1. Install a browser extension like "Get cookies.txt LOCALLY" or "cookies.txt"
+2. Visit YouTube while logged in
+3. Export cookies to a `.txt` file
+4. Save the file in the `cookies/` folder
 
 You can also specify a custom cookies directory or file via CLI:
 ```bash
-python main.py scrape --channel "..." --cookies-dir "D:/fai/cookies"
+python main.py scrape --channel "..." --cookies-dir "./cookies"
 ```
 
 ---
@@ -100,3 +134,20 @@ python main.py scrape --channel "..." --cookies-dir "D:/fai/cookies"
 ```bash
 pytest -v
 ```
+
+---
+
+## Requirements
+
+- Python 3.8+
+- FFmpeg (for video processing and frame extraction)
+- yt-dlp (for YouTube downloading)
+
+---
+
+## Security & Privacy
+
+- `cookies/` folder is excluded from git tracking
+- `config.yaml` with sensitive settings is excluded from git
+- Only `config.example.yaml` is tracked as a template
+- Never commit authentication tokens or personal data
