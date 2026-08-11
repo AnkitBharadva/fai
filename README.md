@@ -1,24 +1,25 @@
 # YouTube Video Scraper & Archival Tool
 
-Production-grade, scalable YouTube video scraper and archival system built in Python using `yt-dlp` (via its native Python API), `FFmpeg`, `Pydantic`, `SQLite`, `Click`, and `Rich`.
+Production-grade, scalable YouTube video scraper and archival system built with **Producer-Consumer Multi-Agent Orchestration**, **Rotated Cookies Support**, `yt-dlp`, `FFmpeg`, `Pydantic`, `SQLite (WAL)`, `Click`, and `Rich`.
 
 ---
 
 ## Features
 
-- **Custom Resolution & Quality Selection**:
-  - Download videos in any specified resolution (e.g. `144p`, `240p`, `360p`, `480p`, `720p`, `1080p`, `1440p`, `4k`, `best`, `worst`).
+- **Producer-Consumer Multi-Agent Architecture**:
+  - **Producer Agent** (`python main.py produce`): Enumerate channels/playlists/URLs and enqueues video tasks into an atomic SQLite task queue.
+  - **Consumer Worker Agents** (`python main.py consume`): Concurrent worker agents pull pending tasks atomically from the queue and process video pipelines in parallel.
+- **Rotated Cookies Pool**:
+  - Automatically loads and rotates cookie files from [`D:\fai\cookies\`](file:///D:/fai/cookies) (`jaman.txt`, `magan.txt`).
+  - Distributes extraction requests across cookie files to bypass rate limits, age restrictions, and bot detection.
+- **Custom Quality & Audio Extraction**:
+  - Download videos in any specified resolution (`144p`, `360p`, `480p`, `720p`, `1080p`, `4k`, `best`).
+  - Extract high-quality audio (`audio.mp3`) into a separate `audio/` directory.
 - **FFmpeg Frame Extraction**:
-  - Extract image frames directly from downloaded videos (`frames/frame_000001.jpg`).
-  - Configurable frame skip step (e.g., `--frame-skip 1` for all frames, `--frame-skip 10` for 1 frame every 10 frames, `--frame-skip 50` for 1 frame every 50 frames).
-- **Comprehensive Data Archival**:
-  - High-res thumbnail download (`thumbnail.jpg`).
-  - Full structured metadata validated via Pydantic (`video_metadata.json`).
-  - Raw description (`description.txt`).
-  - Transcripts / Subtitles: Manual captions preferred with auto-generated & multi-language translation fallbacks; exports `.vtt`, `.srt`, `.json`, and clean NLP-ready `.txt`.
-  - Complete comment threads including nested replies & author metadata (`comments.json`, `comments_threaded.json`, `comments.csv`).
-- **Resumability & Dedup**:
-  - SQLite database manifest (`manifest.db`) tracks status (`pending`, `in_progress`, `done`, `failed`) per video.
+  - Extract image frames from downloaded videos with custom frame-skipping steps (`frames/frame_000001.jpg`).
+- **Full Archival & Transcripts**:
+  - Transcripts exported in WebVTT, SRT, JSON, and clean plain-text with English translation fallbacks.
+  - Complete comment threads and nested replies.
 
 ---
 
@@ -30,9 +31,10 @@ data/
     └── {video_id}/
         ├── video/
         │   └── {video_id}.mp4
+        ├── audio/
+        │   └── audio.mp3
         ├── frames/
         │   ├── frame_000001.jpg
-        │   ├── frame_000002.jpg
         │   └── ...
         ├── metadata/
         │   ├── video_metadata.json
@@ -41,7 +43,7 @@ data/
         │   ├── en.srt
         │   ├── en.vtt
         │   ├── en_clean.txt
-        │   └── ... (other languages)
+        │   └── ...
         ├── comments/
         │   ├── comments.json
         │   ├── comments_threaded.json
@@ -49,6 +51,9 @@ data/
         ├── thumbnails/
         │   └── thumbnail.jpg
         └── status.json
+cookies/
+├── jaman.txt
+└── magan.txt
 manifest.db
 logs/
 └── scraper.log
@@ -56,60 +61,36 @@ logs/
 
 ---
 
-## Installation & Setup
+## Quick Start (Producer-Consumer Multi-Agent Orchestration)
 
-1. **Activate Environment**:
-   ```bash
-   conda activate fai
-   ```
-
-2. **Install Dependencies**:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
----
-
-## CLI Usage Examples
-
+### 1. Integrated Producer-Consumer Command (Default)
+Scrapes a channel end-to-end by discovering videos and running consumer worker agents:
 ```bash
-# 1. Scrape a single video with custom resolution (e.g., 360p or 480p)
-python main.py scrape --url "https://www.youtube.com/watch?v=dQw4w9WgXcQ" --quality 360p
+python main.py scrape --channel "https://www.youtube.com/@ChannelHandle" --workers 4
+```
 
-# 2. Extract frames from video (e.g., 1 frame every 30 frames)
-python main.py scrape --url "https://www.youtube.com/watch?v=dQw4w9WgXcQ" --extract-frames --frame-skip 30
+### 2. Discoupled Producer-Consumer Mode
 
-# 3. Scrape an entire channel at 720p resolution
-python main.py scrape --channel "https://www.youtube.com/@ChannelHandle" --quality 720p --max-videos 50
+#### Step A: Run Producer Agent (Enqueues Tasks)
+```bash
+python main.py produce --channel "https://www.youtube.com/@ChannelHandle" --max-videos 100
+```
 
-# 4. Check database manifest summary
-python main.py status
-
-# 5. Retry all failed videos in the manifest
-python main.py retry-failed
+#### Step B: Run Consumer Worker Agents (Processes Queue)
+Launch parallel consumer workers pulling tasks atomically from the queue:
+```bash
+python main.py consume --workers 4
 ```
 
 ---
 
-## Configuration (`config.yaml`)
+## Cookies Management
 
-```yaml
-data_dir: "./data"
-db_path: "manifest.db"
-log_dir: "./logs"
-workers: 2
-rate_limit_delay: 1.5
+Cookie files uploaded to [`cookies/`](file:///D:/fai/cookies) (e.g. `jaman.txt` and `magan.txt`) are automatically detected and rotated round-robin across extraction calls.
 
-download_video: true
-quality_ceiling: "1080p"  # e.g., 144p, 360p, 480p, 720p, 1080p, 4k, best, worst
-
-extract_frames: false    # Set to true to enable FFmpeg frame extraction
-frame_skip: 10           # Extract 1 frame every N frames (e.g. 10)
-
-max_comments: null
-subtitle_languages:
-  - "en"
-  - "auto"
+You can also specify a custom cookies directory or file via CLI:
+```bash
+python main.py scrape --channel "..." --cookies-dir "D:/fai/cookies"
 ```
 
 ---

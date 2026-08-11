@@ -28,6 +28,7 @@ def cli():
 @click.option("--frame-skip", type=int, help="Number of frames to skip during frame extraction (e.g., 10 = extract 1 frame every 10 frames).")
 @click.option("--extract-audio/--skip-audio", default=True, help="Extract high-quality audio track into separate audio folder (default: True).")
 @click.option("--audio-format", default="mp3", help="Target audio format (mp3, m4a, wav, flac). Default: mp3.")
+@click.option("--cookies-dir", help="Path to cookies directory or file (default: ./cookies).")
 @click.option("--max-videos", type=int, help="Maximum number of videos to process.")
 @click.option("--workers", "-w", type=int, help="Number of parallel worker threads.")
 @click.option("--force", is_flag=True, default=False, help="Force re-scraping even if marked completed in manifest.")
@@ -44,6 +45,7 @@ def scrape(
     frame_skip: Optional[int],
     extract_audio: bool,
     audio_format: str,
+    cookies_dir: Optional[str],
     max_videos: Optional[int],
     workers: Optional[int],
     force: bool,
@@ -72,6 +74,8 @@ def scrape(
         cli_overrides["extract_audio"] = extract_audio
     if audio_format:
         cli_overrides["audio_format"] = audio_format
+    if cookies_dir:
+        cli_overrides["cookies_dir"] = cookies_dir
 
     final_cfg = merge_config_with_cli(cfg, **cli_overrides)
     orchestrator = ScrapingOrchestrator(final_cfg)
@@ -86,6 +90,50 @@ def scrape(
         workers=workers,
         force=force,
     )
+
+
+@cli.command()
+@click.option("--channel", "-c", help="YouTube channel URL.")
+@click.option("--playlist", "-p", help="YouTube playlist URL.")
+@click.option("--url", "-u", multiple=True, help="YouTube video URL or video ID.")
+@click.option("--file", "-f", help="Path to text file containing YouTube URLs/IDs.")
+@click.option("--max-videos", type=int, help="Maximum number of videos to enqueue.")
+@click.option("--config", help="Path to custom config.yaml file.")
+def produce(
+    channel: Optional[str],
+    playlist: Optional[str],
+    url: Tuple[str, ...],
+    file: Optional[str],
+    max_videos: Optional[int],
+    config: Optional[str],
+):
+    """Producer Agent: Enumerate channel/playlist videos and enqueue tasks into atomic database queue."""
+    cfg = load_config(config or "config.yaml")
+    orchestrator = ScrapingOrchestrator(cfg)
+    url_list = list(url) if url else None
+    count = orchestrator.produce_channel_tasks(
+        channel_url=channel,
+        playlist_url=playlist,
+        urls=url_list,
+        file_path=file,
+        max_videos=max_videos,
+    )
+    console.print(f"[bold green]Producer successfully enqueued {count} pending task(s) into queue.[/bold green]")
+
+
+@cli.command()
+@click.option("--workers", "-w", type=int, help="Number of parallel worker consumer agents.")
+@click.option("--cookies-dir", help="Path to cookies directory (default: ./cookies).")
+@click.option("--config", help="Path to custom config.yaml file.")
+def consume(workers: Optional[int], cookies_dir: Optional[str], config: Optional[str]):
+    """Consumer Agent: Run parallel worker agents pulling and processing tasks from queue."""
+    cfg = load_config(config or "config.yaml")
+    if workers is not None:
+        cfg["workers"] = workers
+    if cookies_dir:
+        cfg["cookies_dir"] = cookies_dir
+    orchestrator = ScrapingOrchestrator(cfg)
+    orchestrator.consume_queue(workers=workers)
 
 
 @cli.command()

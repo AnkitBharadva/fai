@@ -10,23 +10,24 @@ workers: 2
 rate_limit_delay: 1.5  # Seconds of delay/jitter between requests
 retry_count: 3
 
-# Download Settings
+# Download & Cookies Settings
 download_video: true
 audio_only: false
-quality_ceiling: "1080p"  # e.g., 144p, 360p, 480p, 720p, 1080p, 4k, best, worst
+quality_ceiling: "1080p"   # e.g., 144p, 360p, 480p, 720p, 1080p, 4k, best, worst
 download_thumbnail: true
-cookies_file: null       # Path to cookies.txt if age-restricted/member video
+cookies_dir: "./cookies"   # Path to cookies directory containing jaman.txt, magan.txt
+cookies_file: null         # Specific cookies file override if needed
 
 # Audio Extraction
-extract_audio: true      # Extract high-quality audio track in a separate audio folder
-audio_format: "mp3"      # Target audio format (mp3, m4a, wav, flac)
+extract_audio: true        # Extract high-quality audio track in a separate audio folder
+audio_format: "mp3"        # Target audio format (mp3, m4a, wav, flac)
 
 # Frame Extraction (FFmpeg)
-extract_frames: false    # Set to true to extract image frames from downloaded videos
-frame_skip: 10           # Extract 1 frame every N frames (e.g., 1 = all frames, 10 = 1 frame per 10 frames)
+extract_frames: false      # Set to true to extract image frames from downloaded videos
+frame_skip: 10             # Extract 1 frame every N frames (e.g., 1 = all frames, 10 = 1 frame per 10 frames)
 
 # Content Extraction
-max_comments: null       # null = no cap (extract all comments)
+max_comments: null         # null = no cap (extract all comments)
 subtitle_languages:
   - "en"
   - "auto"

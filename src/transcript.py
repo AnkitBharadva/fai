@@ -105,12 +105,15 @@ def translate_segments(segments: List[Dict[str, Any]], target_lang: str = "en") 
 
         translator = GoogleTranslator(source="auto", target=target_lang)
 
-        # Batch in groups of 40 segments
-        batch_size = 40
+        # Batch in groups of 100 segments for maximum speed
+        batch_size = 100
         translated_segments: List[Dict[str, Any]] = []
 
-        for i in range(0, len(segments), batch_size):
-            batch = segments[i : i + batch_size]
+        # Cap max segments to translate at 300 to keep execution fast
+        segments_to_translate = segments[:300]
+
+        for i in range(0, len(segments_to_translate), batch_size):
+            batch = segments_to_translate[i : i + batch_size]
             texts = [str(s.get("text", "")).strip() for s in batch]
             valid_texts = [t if t else "..." for t in texts]
 
@@ -126,6 +129,10 @@ def translate_segments(segments: List[Dict[str, Any]], target_lang: str = "en") 
                     "duration": seg.get("duration", 0.0),
                     "text": trans_text,
                 })
+
+        # Append remaining untranslated segments if any
+        for seg in segments[300:]:
+            translated_segments.append(seg)
 
         return translated_segments
     except Exception:
@@ -172,38 +179,111 @@ class TranscriptExtractor:
         processed_langs: List[str] = []
         base_segments: List[Dict[str, Any]] = []
 
-        # TIER 1: Try youtube-transcript-api
+        # TIER 1: Native yt-dlp caption extraction with curl_cffi impersonate
         try:
-            from youtube_transcript_api import YouTubeTranscriptApi
-
-            api = YouTubeTranscriptApi()
-            t_list = api.list(video_id)
-
-            for t in t_list:
-                lang_code = t.language_code
-                try:
-                    fetched = t.fetch()
-                    raw_data = fetched.to_raw_data() if hasattr(fetched, "to_raw_data") else list(fetched)
-                    if raw_data:
-                        self._save_segment_transcript(raw_data, lang_code, transcript_dir)
-                        processed_langs.append(lang_code)
-                        if not base_segments:
-                            base_segments = raw_data
-                except Exception:
-                    continue
-
-        except Exception:
-            pass
-
-        # TIER 2: Try yt-dlp if base_segments not found yet
-        if not base_segments:
+            clean_langs = [tl for tl in (target_languages or ["en"]) if tl != "auto"]
+            if not clean_langs:
+                clean_langs = ["en", "hi"]
+            sub_langs = list(set(clean_langs + ["all"]))
             opts: Dict[str, Any] = {
                 "quiet": True,
                 "no_warnings": True,
                 "skip_download": True,
                 "writesubtitles": True,
                 "writeautomaticsub": True,
-                "subtitleslangs": ["all"],
+                "subtitleslangs": sub_langs,
+                "js_runtimes": {"node": {}},
+                "extractor_args": {"youtube": {"player_client": ["mweb", "ios", "android_vr"]}},
+            }
+            if self.cookies_file and Path(self.cookies_file).exists():
+                opts["cookiefile"] = self.cookies_file
+
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(video_url, download=False)
+                if info:
+                    subtitles = info.get("subtitles") or {}
+                    auto_captions = info.get("automatic_captions") or {}
+
+                    all_tracks = {}
+                    for lc, trs in auto_captions.items():
+                        all_tracks[lc] = trs
+                    if prefer_manual:
+                        for lc, trs in subtitles.items():
+                            all_tracks[lc] = trs
+
+                    for lc, trs in all_tracks.items():
+                        sub_url = None
+                        for t in trs:
+                            if t.get("ext") in ["vtt", "srt", "json3"]:
+                                sub_url = t.get("url")
+                                break
+                        if not sub_url and trs:
+                            sub_url = trs[0].get("url")
+
+                        if not sub_url:
+                            continue
+
+                        try:
+                            from curl_cffi import requests as cffi_requests
+                            resp = cffi_requests.get(
+                                sub_url,
+                                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
+                                impersonate="chrome120",
+                                timeout=10,
+                            )
+                            raw_data = resp.text
+                            if not raw_data or resp.status_code != 200:
+                                continue
+
+                            clean_code = re.sub(r"[^a-zA-Z0-9_-]", "_", lc)
+                            if raw_data.strip().startswith("{"):
+                                parsed_json = json.loads(raw_data)
+                                events = parsed_json.get("events", [])
+                                segments = []
+                                for ev in events:
+                                    seg_text = "".join(
+                                        s.get("utf8", "") for s in ev.get("segs", []) if s.get("utf8")
+                                    )
+                                    if seg_text.strip():
+                                        segments.append({
+                                            "start": ev.get("tStartMs", 0) / 1000.0,
+                                            "duration": ev.get("dDurationMs", 0) / 1000.0,
+                                            "text": seg_text,
+                                        })
+                                if segments:
+                                    self._save_segment_transcript(segments, clean_code, transcript_dir)
+                                    processed_langs.append(clean_code)
+                                    if not base_segments:
+                                        base_segments = segments
+                            else:
+                                clean_content = clean_subtitle_text(raw_data)
+                                with open(transcript_dir / f"{clean_code}.vtt", "w", encoding="utf-8") as f:
+                                    f.write(raw_data)
+                                with open(transcript_dir / f"{clean_code}.srt", "w", encoding="utf-8") as f:
+                                    f.write(raw_data)
+                                with open(transcript_dir / f"{clean_code}_clean.txt", "w", encoding="utf-8") as f:
+                                    f.write(clean_content)
+                                processed_langs.append(clean_code)
+                        except Exception:
+                            continue
+        except Exception:
+            pass
+
+        # TIER 2: Try yt-dlp if base_segments not found yet
+        if not base_segments:
+            clean_langs = [tl for tl in (target_languages or ["en"]) if tl != "auto"]
+            if not clean_langs:
+                clean_langs = ["en", "hi"]
+            sub_langs = list(set(clean_langs + ["all"]))
+            opts: Dict[str, Any] = {
+                "quiet": True,
+                "no_warnings": True,
+                "skip_download": True,
+                "writesubtitles": True,
+                "writeautomaticsub": True,
+                "subtitleslangs": sub_langs,
+                "js_runtimes": {"node": {}},
+                "extractor_args": {"youtube": {"player_client": ["mweb", "ios", "android_vr"]}},
             }
             if self.cookies_file and Path(self.cookies_file).exists():
                 opts["cookiefile"] = self.cookies_file
@@ -235,14 +315,24 @@ class TranscriptExtractor:
                                 continue
 
                             try:
-                                req = urllib.request.Request(
-                                    sub_url,
-                                    headers={
-                                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-                                    },
-                                )
-                                with urllib.request.urlopen(req) as resp:
-                                    raw_data = resp.read().decode("utf-8", errors="ignore")
+                                try:
+                                    from curl_cffi import requests as cffi_requests
+                                    resp = cffi_requests.get(
+                                        sub_url,
+                                        headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
+                                        impersonate="chrome120",
+                                        timeout=15,
+                                    )
+                                    raw_data = resp.text
+                                except Exception:
+                                    req = urllib.request.Request(
+                                        sub_url,
+                                        headers={
+                                            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                                        },
+                                    )
+                                    with urllib.request.urlopen(req) as resp:
+                                        raw_data = resp.read().decode("utf-8", errors="ignore")
 
                                 clean_code = re.sub(r"[^a-zA-Z0-9_-]", "_", lc)
                                 if raw_data.strip().startswith("{"):
@@ -273,7 +363,6 @@ class TranscriptExtractor:
                                     with open(transcript_dir / f"{clean_code}_clean.txt", "w", encoding="utf-8") as f:
                                         f.write(clean_content)
                                     processed_langs.append(clean_code)
-
                             except Exception:
                                 continue
             except Exception:

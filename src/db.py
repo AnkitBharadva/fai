@@ -1,16 +1,14 @@
-"""SQLite database manifest for tracking processing status and resumability."""
+"""SQLite database manifest for tracking processing status and producer-consumer queue."""
 
+from contextlib import contextmanager
 from datetime import datetime, timezone
 import sqlite3
 from typing import List, Optional
 from src.schemas import ManifestRecord
 
 
-from contextlib import contextmanager
-
-
 class ManifestDB:
-    """SQLite database helper for persistent video status manifest."""
+    """SQLite database helper for persistent video status manifest and atomic task queue."""
 
     def __init__(self, db_path: str = "manifest.db"):
         self.db_path = db_path
@@ -18,9 +16,10 @@ class ManifestDB:
 
     @contextmanager
     def _get_connection(self):
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=60.0)
         conn.row_factory = sqlite3.Row
         try:
+            conn.execute("PRAGMA journal_mode=WAL;")
             yield conn
         finally:
             conn.close()
@@ -63,6 +62,61 @@ class ManifestDB:
             return ManifestRecord(
                 video_id=video_id, channel_id=channel_id, status="pending", last_attempt_at=now_str
             )
+
+    def enqueue_videos(self, video_ids: List[str], channel_id: Optional[str] = "unknown_channel") -> int:
+        """Producer function: Atomically enqueue a list of video IDs into manifest queue."""
+        now_str = datetime.now(timezone.utc).isoformat()
+        enqueued_count = 0
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            for vid in video_ids:
+                cursor.execute("SELECT status FROM manifest WHERE video_id = ?", (vid,))
+                row = cursor.fetchone()
+                if not row:
+                    cursor.execute(
+                        """
+                        INSERT INTO manifest (video_id, channel_id, status, last_attempt_at, retry_count)
+                        VALUES (?, ?, 'pending', ?, 0)
+                        """,
+                        (vid, channel_id, now_str),
+                    )
+                    enqueued_count += 1
+                elif row["status"] == "failed":
+                    cursor.execute(
+                        "UPDATE manifest SET status='pending', last_attempt_at=? WHERE video_id=?",
+                        (now_str, vid),
+                    )
+                    enqueued_count += 1
+            conn.commit()
+        return enqueued_count
+
+    def claim_next_pending_task(self) -> Optional[ManifestRecord]:
+        """Consumer function: Atomically claim next pending video task (pending -> in_progress) using immediate transaction lock."""
+        now_str = datetime.now(timezone.utc).isoformat()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("BEGIN IMMEDIATE")
+            cursor.execute(
+                "SELECT * FROM manifest WHERE status = 'pending' ORDER BY last_attempt_at ASC LIMIT 1"
+            )
+            row = cursor.fetchone()
+            if not row:
+                conn.commit()
+                return None
+
+            record = ManifestRecord(**dict(row))
+            cursor.execute(
+                "UPDATE manifest SET status='in_progress', last_attempt_at=? WHERE video_id=? AND status='pending'",
+                (now_str, record.video_id),
+            )
+            if cursor.rowcount == 0:
+                conn.commit()
+                return None
+
+            conn.commit()
+            record.status = "in_progress"
+            record.last_attempt_at = now_str
+            return record
 
     def update_status(
         self,

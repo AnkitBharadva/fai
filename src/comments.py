@@ -26,9 +26,11 @@ class CommentExtractor:
             "no_warnings": True,
             "skip_download": True,
             "getcomments": True,
+            "js_runtimes": {"node": {}},
             "extractor_args": {
                 "youtube": {
-                    "max_comments": [max_str, "all", "all", "all"]
+                    "max_comments": [max_str, "all", "all", "all"],
+                    "player_client": ["mweb", "ios", "android_vr"],
                 }
             },
         }

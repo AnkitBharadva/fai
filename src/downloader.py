@@ -86,6 +86,11 @@ class VideoDownloader:
             "no_warnings": True,
             "format": format_spec,
             "outtmpl": outtmpl,
+            "socket_timeout": 30,
+            "retries": 10,
+            "fragment_retries": 10,
+            "js_runtimes": {"node": {}},
+            "extractor_args": {"youtube": {"player_client": ["mweb", "ios", "android_vr"]}},
         }
         if self.ffmpeg_path:
             opts["ffmpeg_location"] = self.ffmpeg_path

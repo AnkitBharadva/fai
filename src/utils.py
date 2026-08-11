@@ -9,13 +9,12 @@ from typing import List, Optional
 from rich.logging import RichHandler
 
 
-def extract_video_id(url_or_id: str) -> str:
-    """Extract canonical YouTube video ID from various URL formats or raw ID."""
+def extract_video_id(url_or_id: str) -> Optional[str]:
+    """Extract canonical 11-character YouTube video ID, returning None if invalid or a Channel ID."""
     url_or_id = url_or_id.strip()
     if re.match(r"^[a-zA-Z0-9_-]{11}$", url_or_id):
         return url_or_id
 
-    # standard patterns
     patterns = [
         r"(?:v=|\/v\/|embed\/|shorts\/|youtu\.be\/|\/e\/|watch\?.*v=)([a-zA-Z0-9_-]{11})",
         r"youtube\.com\/watch\?.*v=([a-zA-Z0-9_-]{11})",
@@ -26,7 +25,7 @@ def extract_video_id(url_or_id: str) -> str:
         if match:
             return match.group(1)
 
-    return url_or_id
+    return None
 
 
 def sanitize_filename(name: str, max_length: int = 100) -> str:

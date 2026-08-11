@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from src.comments import CommentExtractor
+from src.cookies_manager import CookiesManager
 from src.db import ManifestDB
 from src.downloader import VideoDownloader
 from src.metadata import MetadataExtractor
@@ -25,19 +26,32 @@ class ScrapingOrchestrator:
         self.db = ManifestDB(config.get("db_path", "manifest.db"))
         self.organizer = FolderOrganizer(config.get("data_dir", "./data"))
 
-        cookies_file = config.get("cookies_file")
-        self.metadata_extractor = MetadataExtractor(cookies_file=cookies_file)
-        self.transcript_extractor = TranscriptExtractor(cookies_file=cookies_file)
-        self.comment_extractor = CommentExtractor(cookies_file=cookies_file)
-        self.downloader = VideoDownloader(
-            quality_ceiling=config.get("quality_ceiling", "1080p"),
-            audio_only=config.get("audio_only", False),
-            cookies_file=cookies_file,
+        cookies_input = config.get("cookies_file") or config.get("cookies_dir") or "cookies"
+        self.cookies_manager = CookiesManager(cookies_input)
+
+    def _get_extractors_for_task(self):
+        """Instantiate extractors using a rotated cookie file."""
+        cookie_file = self.cookies_manager.get_cookie_file()
+        if cookie_file:
+            self.logger.debug(f"Using rotated cookie file: {cookie_file}")
+
+        meta_extractor = MetadataExtractor(cookies_file=cookie_file)
+        transcript_extractor = TranscriptExtractor(cookies_file=cookie_file)
+        comment_extractor = CommentExtractor(cookies_file=cookie_file)
+        downloader = VideoDownloader(
+            quality_ceiling=self.config.get("quality_ceiling", "1080p"),
+            audio_only=self.config.get("audio_only", False),
+            cookies_file=cookie_file,
         )
+        return meta_extractor, transcript_extractor, comment_extractor, downloader
 
     def process_single_video(self, video_id_or_url: str, force: bool = False) -> bool:
         """Process a single video through the complete pipeline with retry logic."""
         video_id = extract_video_id(video_id_or_url)
+        if not video_id:
+            self.logger.error(f"Invalid video ID or Channel ID passed as video task: {video_id_or_url}")
+            return False
+
         video_url = f"https://www.youtube.com/watch?v={video_id}"
 
         # Resumability check
@@ -47,6 +61,8 @@ class ScrapingOrchestrator:
 
         self.db.register_video(video_id)
         self.db.update_status(video_id, "in_progress")
+
+        meta_extractor, transcript_extractor, comment_extractor, downloader = self._get_extractors_for_task()
 
         start_time = datetime.now(timezone.utc)
         status_info: Dict[str, Any] = {
@@ -58,11 +74,11 @@ class ScrapingOrchestrator:
         try:
             # 1. Metadata & Description
             self.logger.info(f"[{video_id}] Extracting metadata & description...")
-            metadata = self.metadata_extractor.extract_metadata(video_url)
+            metadata = meta_extractor.extract_metadata(video_url)
             channel_id = metadata.channel_id or "unknown_channel"
 
             dirs = self.organizer.setup_video_dirs(channel_id, video_id)
-            self.metadata_extractor.save_metadata(metadata, dirs["metadata"])
+            meta_extractor.save_metadata(metadata, dirs["metadata"])
             status_info["components"]["metadata"] = "success"
 
             # Update channel_id in DB manifest
@@ -71,14 +87,14 @@ class ScrapingOrchestrator:
             # 2. Thumbnail
             if self.config.get("download_thumbnail", True):
                 self.logger.info(f"[{video_id}] Downloading thumbnail...")
-                self.downloader.download_thumbnail(metadata.thumbnail_url, dirs["thumbnails"])
+                downloader.download_thumbnail(metadata.thumbnail_url, dirs["thumbnails"])
                 status_info["components"]["thumbnail"] = "success"
 
             # 3. Video Download
             downloaded_video = None
             if self.config.get("download_video", True):
                 self.logger.info(f"[{video_id}] Downloading video stream...")
-                downloaded_video = self.downloader.download_video(video_url, dirs["video"], video_id)
+                downloaded_video = downloader.download_video(video_url, dirs["video"], video_id)
                 status_info["components"]["video"] = "success"
             else:
                 status_info["components"]["video"] = "skipped"
@@ -87,14 +103,14 @@ class ScrapingOrchestrator:
             if self.config.get("extract_frames", False) and downloaded_video:
                 frame_skip = self.config.get("frame_skip", 1)
                 self.logger.info(f"[{video_id}] Extracting frames (frame_skip={frame_skip})...")
-                extracted = self.downloader.extract_frames(downloaded_video, dirs["frames"], frame_skip=frame_skip)
+                extracted = downloader.extract_frames(downloaded_video, dirs["frames"], frame_skip=frame_skip)
                 status_info["components"]["frames"] = f"success ({len(extracted)} frames extracted)"
 
             # 3c. Audio Extraction
             if self.config.get("extract_audio", True):
                 fmt = self.config.get("audio_format", "mp3")
                 self.logger.info(f"[{video_id}] Extracting high quality audio ({fmt})...")
-                audio_file = self.downloader.extract_audio(
+                audio_file = downloader.extract_audio(
                     video_file=downloaded_video,
                     output_dir=dirs["audio"],
                     video_url=video_url,
@@ -104,7 +120,7 @@ class ScrapingOrchestrator:
 
             # 4. Transcripts
             self.logger.info(f"[{video_id}] Fetching transcripts/captions...")
-            langs = self.transcript_extractor.extract_and_save_transcripts(
+            langs = transcript_extractor.extract_and_save_transcripts(
                 video_url=video_url,
                 transcript_dir=dirs["transcript"],
                 target_languages=self.config.get("subtitle_languages", ["en"]),
@@ -114,11 +130,11 @@ class ScrapingOrchestrator:
 
             # 5. Comments
             self.logger.info(f"[{video_id}] Fetching comment threads...")
-            comments = self.comment_extractor.extract_comments(
+            comments = comment_extractor.extract_comments(
                 video_url=video_url,
                 max_comments=self.config.get("max_comments"),
             )
-            self.comment_extractor.save_comments(comments, dirs["comments"])
+            comment_extractor.save_comments(comments, dirs["comments"])
             status_info["components"]["comments"] = f"success ({len(comments)} comments)"
 
             # Finish
@@ -140,17 +156,15 @@ class ScrapingOrchestrator:
             self.db.update_status(video_id, "failed", error_message=err_msg)
             return False
 
-    def run(
+    def produce_channel_tasks(
         self,
-        urls: Optional[List[str]] = None,
-        file_path: Optional[str] = None,
         channel_url: Optional[str] = None,
         playlist_url: Optional[str] = None,
+        urls: Optional[List[str]] = None,
+        file_path: Optional[str] = None,
         max_videos: Optional[int] = None,
-        workers: Optional[int] = None,
-        force: bool = False,
-    ) -> Dict[str, int]:
-        """Run batch scraper across collected input targets."""
+    ) -> int:
+        """Producer agent step: Expand channel/playlist URLs and enqueue pending tasks into atomic manifest.db queue."""
         target_urls: List[str] = []
 
         if urls:
@@ -163,17 +177,19 @@ class ScrapingOrchestrator:
                     if line and not line.startswith("#"):
                         target_urls.append(line)
 
+        meta_extractor, _, _, _ = self._get_extractors_for_task()
+
         if channel_url:
-            self.logger.info(f"Expanding channel URL: {channel_url}")
-            expanded = self.metadata_extractor.expand_url(channel_url)
+            self.logger.info(f"[PRODUCER] Expanding channel URL: {channel_url}")
+            expanded = meta_extractor.expand_url(channel_url)
             target_urls.extend(expanded)
 
         if playlist_url:
-            self.logger.info(f"Expanding playlist URL: {playlist_url}")
-            expanded = self.metadata_extractor.expand_url(playlist_url)
+            self.logger.info(f"[PRODUCER] Expanding playlist URL: {playlist_url}")
+            expanded = meta_extractor.expand_url(playlist_url)
             target_urls.extend(expanded)
 
-        # Extract canonical video IDs & deduplicate
+        # Canonicalize & deduplicate
         video_ids: List[str] = []
         seen = set()
         for item in target_urls:
@@ -185,42 +201,66 @@ class ScrapingOrchestrator:
         if max_videos and max_videos > 0:
             video_ids = video_ids[:max_videos]
 
-        self.logger.info(f"Total canonical video IDs to process: {len(video_ids)}")
+        self.logger.info(f"[PRODUCER] Enqueueing {len(video_ids)} video tasks into atomic queue...")
+        count = self.db.enqueue_videos(video_ids)
+        self.logger.info(f"[PRODUCER] Successfully enqueued {count} pending tasks.")
+        return count
 
+    def consume_queue(self, workers: Optional[int] = None) -> Dict[str, int]:
+        """Consumer agent step: Launch worker pool pulling pending video tasks atomically from manifest.db queue."""
         max_workers = workers or self.config.get("workers", 2)
         delay = float(self.config.get("rate_limit_delay", 1.5))
-
         counts = {"success": 0, "failed": 0, "skipped": 0}
 
-        def worker_fn(vid: str) -> bool:
-            if not force and self.db.is_completed(vid):
-                return None  # Skipped
-            res = self.process_single_video(vid, force=force)
-            if delay > 0:
-                time.sleep(delay)
-            return res
+        def worker_loop(worker_id: int):
+            while True:
+                task = self.db.claim_next_pending_task()
+                if not task:
+                    break
 
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_to_vid = {executor.submit(worker_fn, vid): vid for vid in video_ids}
-            for future in as_completed(future_to_vid):
-                vid = future_to_vid[future]
-                try:
-                    res = future.result()
-                    if res is None:
-                        counts["skipped"] += 1
-                    elif res:
-                        counts["success"] += 1
-                    else:
-                        counts["failed"] += 1
-                except Exception as e:
-                    self.logger.error(f"Worker exception for video {vid}: {e}")
+                self.logger.info(f"[CONSUMER-WORKER-{worker_id}] Claimed task: {task.video_id}")
+                res = self.process_single_video(task.video_id, force=True)
+                if res:
+                    counts["success"] += 1
+                else:
                     counts["failed"] += 1
 
+                if delay > 0:
+                    time.sleep(delay)
+
+        self.logger.info(f"[CONSUMER] Starting {max_workers} worker agent(s)...")
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [executor.submit(worker_loop, w_id) for w_id in range(1, max_workers + 1)]
+            for future in as_completed(futures):
+                future.result()
+
         self.logger.info("==========================================")
-        self.logger.info("Batch Run Summary:")
+        self.logger.info("Consumer Batch Summary:")
         self.logger.info(f"  Success: {counts['success']}")
-        self.logger.info(f"  Skipped: {counts['skipped']}")
         self.logger.info(f"  Failed:  {counts['failed']}")
         self.logger.info("==========================================")
 
         return counts
+
+    def run(
+        self,
+        urls: Optional[List[str]] = None,
+        file_path: Optional[str] = None,
+        channel_url: Optional[str] = None,
+        playlist_url: Optional[str] = None,
+        max_videos: Optional[int] = None,
+        workers: Optional[int] = None,
+        force: bool = False,
+    ) -> Dict[str, int]:
+        """Integrated Producer-Consumer entrypoint: Discovery + Queueing + Consumer worker execution."""
+        # 1. Producer step
+        self.produce_channel_tasks(
+            channel_url=channel_url,
+            playlist_url=playlist_url,
+            urls=urls,
+            file_path=file_path,
+            max_videos=max_videos,
+        )
+
+        # 2. Consumer step
+        return self.consume_queue(workers=workers)
