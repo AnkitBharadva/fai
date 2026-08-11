@@ -38,6 +38,7 @@ htmlcov/
 # Config secrets
 cookies/
 cookies.txt
+channels.csv
 config.local.yaml
 config.yaml
 *.env
