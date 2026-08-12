@@ -212,6 +212,10 @@ class TranscriptExtractor:
                             all_tracks[lc] = trs
 
                     for lc, trs in all_tracks.items():
+                        # Strict language filter: English (en) and Hindi (hi) ONLY
+                        if not any(lc.startswith(prefix) for prefix in ["en", "hi"]):
+                            continue
+
                         sub_url = None
                         for t in trs:
                             if t.get("ext") in ["vtt", "srt", "json3"]:
@@ -271,10 +275,7 @@ class TranscriptExtractor:
 
         # TIER 2: Try yt-dlp if base_segments not found yet
         if not base_segments:
-            clean_langs = [tl for tl in (target_languages or ["en"]) if tl != "auto"]
-            if not clean_langs:
-                clean_langs = ["en", "hi"]
-            sub_langs = list(set(clean_langs + ["all"]))
+            sub_langs = ["en", "hi", "en-orig", "hi-orig"]
             opts: Dict[str, Any] = {
                 "quiet": True,
                 "no_warnings": True,
@@ -303,6 +304,10 @@ class TranscriptExtractor:
                                 all_tracks[lc] = trs
 
                         for lc, trs in all_tracks.items():
+                            # Strict language filter: English (en) and Hindi (hi) ONLY
+                            if not any(lc.startswith(prefix) for prefix in ["en", "hi"]):
+                                continue
+
                             sub_url = None
                             for t in trs:
                                 if t.get("ext") in ["vtt", "srt", "json3"]:
@@ -368,12 +373,17 @@ class TranscriptExtractor:
             except Exception:
                 pass
 
-        # TIER 3: If 'en' (English) or target language is missing from processed_langs and we have base_segments, translate to target language!
-        want_en = "en" in target_languages or "auto" in target_languages or "all" in target_languages
-        if want_en and "en" not in processed_langs and base_segments:
+        # TIER 3: Ensure English (en) and Hindi (hi) transcripts exist if base_segments are available
+        if not any(l.startswith("en") for l in processed_langs) and base_segments:
             en_segments = translate_segments(base_segments, target_lang="en")
             if en_segments:
                 self._save_segment_transcript(en_segments, "en", transcript_dir)
                 processed_langs.append("en")
+
+        if not any(l.startswith("hi") for l in processed_langs) and base_segments:
+            hi_segments = translate_segments(base_segments, target_lang="hi")
+            if hi_segments:
+                self._save_segment_transcript(hi_segments, "hi", transcript_dir)
+                processed_langs.append("hi")
 
         return processed_langs

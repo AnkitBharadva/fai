@@ -69,7 +69,7 @@ class VideoDownloader:
             height = int(match.group(1)) if match else None
 
         if height:
-            return f"bestvideo[height<={height}]+bestaudio/best[height<={height}]/best"
+            return f"bestvideo[height<={height}]+bestaudio/best[height<={height}]/bestvideo+bestaudio/best"
 
         # If user passed custom yt-dlp format selector string directly
         return self.quality_ceiling
@@ -89,6 +89,8 @@ class VideoDownloader:
             "socket_timeout": 30,
             "retries": 10,
             "fragment_retries": 10,
+            "check_formats": False,
+            "ignore_no_formats_error": True,
             "js_runtimes": {"node": {}},
             "extractor_args": {"youtube": {"player_client": ["mweb", "ios", "android_vr"]}},
         }

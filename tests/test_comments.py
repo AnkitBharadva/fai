@@ -37,4 +37,4 @@ def test_save_comments():
 
         assert (out_dir / "comments.json").exists()
         assert (out_dir / "comments_threaded.json").exists()
-        assert (out_dir / "comments.csv").exists()
+        assert not (out_dir / "comments.csv").exists()

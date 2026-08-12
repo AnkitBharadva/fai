@@ -96,7 +96,7 @@ class CommentExtractor:
         return top_level
 
     def save_comments(self, records: List[CommentRecord], comments_dir: Path) -> None:
-        """Save comments to comments.json, comments_threaded.json, and comments.csv."""
+        """Save comments to comments.json and comments_threaded.json."""
         comments_dir.mkdir(parents=True, exist_ok=True)
 
         # 1. comments.json
@@ -111,34 +111,3 @@ class CommentExtractor:
         dict_threaded = [t.model_dump() for t in threaded]
         with open(threaded_path, "w", encoding="utf-8") as f:
             json.dump(dict_threaded, f, indent=2, ensure_ascii=False)
-
-        # 3. comments.csv
-        csv_path = comments_dir / "comments.csv"
-        fieldnames = [
-            "comment_id",
-            "parent_id",
-            "is_reply",
-            "author",
-            "author_channel_id",
-            "like_count",
-            "reply_count",
-            "published_time",
-            "text",
-        ]
-        with open(csv_path, "w", encoding="utf-8", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            writer.writeheader()
-            for r in records:
-                writer.writerow(
-                    {
-                        "comment_id": r.comment_id,
-                        "parent_id": r.parent_id or "",
-                        "is_reply": r.is_reply,
-                        "author": r.author,
-                        "author_channel_id": r.author_channel_id or "",
-                        "like_count": r.like_count,
-                        "reply_count": r.reply_count,
-                        "published_time": r.published_time or "",
-                        "text": r.text,
-                    }
-                )
