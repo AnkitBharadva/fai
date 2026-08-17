@@ -71,3 +71,26 @@ class ManifestRecord(BaseModel):
     completed_at: Optional[str] = None
     retry_count: int = 0
     error_message: Optional[str] = None
+
+
+class CommunityPoll(BaseModel):
+    """Pydantic model for community post polls."""
+    choices: List[str] = Field(default_factory=list)
+    total_votes: Optional[str] = None
+
+
+class CommunityPost(BaseModel):
+    """Pydantic model for full YouTube community post metadata and comments."""
+    post_id: str
+    post_url: str
+    channel_id: Optional[str] = "unknown_channel"
+    channel_name: Optional[str] = "Unknown Channel"
+    published_time: Optional[str] = None
+    text: str = ""
+    likes: Optional[str] = "0"
+    poll: Optional[CommunityPoll] = None
+    images: List[str] = Field(default_factory=list)
+    shared_video_id: Optional[str] = None
+    comments_count: int = 0
+    comments: List[CommentRecord] = Field(default_factory=list)
+

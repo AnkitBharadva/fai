@@ -7,7 +7,7 @@ log_dir: "./logs"
 
 # Performance & Rate Limiting
 workers: 2
-rate_limit_delay: 2.5  # Seconds of delay/jitter between requests
+rate_limit_delay: 5  # Seconds of delay/jitter between requests
 retry_count: 3
 
 # Download & Cookies Settings

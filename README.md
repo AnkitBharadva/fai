@@ -3,7 +3,7 @@
   <p align="center">
     <strong>Production-grade YouTube data extraction pipeline</strong>
     <br />
-    Multi-threaded · Resumable · Fault-tolerant
+    Videos · Audio · Transcripts · Comments · Community Posts · Polls · Multi-threaded · Resumable
   </p>
 </p>
 
@@ -12,13 +12,14 @@
   <a href="#features">Features</a> •
   <a href="#quick-start">Quick Start</a> •
   <a href="#cli-reference">CLI Reference</a> •
+  <a href="#community-scraper">Community Scraper</a> •
   <a href="#output-schema">Output Schema</a> •
   <a href="#configuration">Configuration</a>
 </p>
 
 ---
 
-**Fai** is a high-throughput, production-grade data extraction pipeline that scrapes, archives, and structures YouTube video data at scale. Built around a **Producer-Consumer architecture** with an **atomic SQLite task queue**, it processes entire channels and playlists through parallel worker agents while maintaining full resumability, deduplication, and structured output.
+**Fai** is a high-throughput, production-grade data extraction pipeline that scrapes, archives, and structures YouTube video and community data at scale. Built around a **Producer-Consumer architecture** with an **atomic SQLite task queue** and a native **InnerTube Community Extractor**, it processes entire channels, playlists, and community feeds through parallel worker agents while maintaining full resumability, deduplication, and structured output.
 
 Designed for ML dataset construction, research corpus building, and large-scale content archival.
 
@@ -27,43 +28,40 @@ Designed for ML dataset construction, research corpus building, and large-scale 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                         CLI Interface (Click)                       │
-│   scrape · produce · consume · status · retry-failed                │
-└──────────────────────────────┬──────────────────────────────────────┘
-                               │
-                 ┌─────────────▼──────────────┐
-                 │    ScrapingOrchestrator     │
-                 │  (Producer-Consumer Core)   │
-                 └─────┬───────────────┬───────┘
-                       │               │
-          ┌────────────▼──┐    ┌───────▼────────────┐
-          │   Producer    │    │   Consumer Pool     │
-          │   Agent       │    │   (ThreadPool)      │
-          │               │    │                     │
-          │ • Channel     │    │  ┌─Worker 1──────┐  │
-          │   expansion   │    │  │ claim_task()  │  │
-          │ • Playlist    │    │  │ → metadata    │  │
-          │   flattening  │    │  │ → thumbnail   │  │
-          │ • URL/file    │    │  │ → video.mp4   │  │
-          │   ingestion   │    │  │ → audio.mp3   │  │
-          │ • Dedup &     │    │  │ → frames/     │  │
-          │   enqueue     │    │  │ → transcript  │  │
-          └───────┬───────┘    │  │ → comments    │  │
-                  │            │  └───────────────┘  │
-                  │            │  ┌─Worker 2──────┐  │
-                  │            │  │     ...        │  │
-                  │            │  └───────────────┘  │
-                  │            │  ┌─Worker N──────┐  │
-                  │            │  │     ...        │  │
-                  │            │  └───────────────┘  │
-                  │            └─────────┬───────────┘
-                  │                      │
-          ┌───────▼──────────────────────▼───────┐
-          │          manifest.db (SQLite)         │
-          │  WAL mode · BEGIN IMMEDIATE locking   │
-          │  States: pending → in_progress → done │
-          └──────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────┐
+│                          CLI Interface (Click)                          │
+│    scrape · produce · consume · status · retry-failed · community       │
+└──────────────────┬──────────────────────────────────┬───────────────────┘
+                   │                                  │
+     ┌─────────────▼──────────────┐       ┌───────────▼──────────────┐
+     │    ScrapingOrchestrator     │       │    CommunityExtractor    │
+     │  (Producer-Consumer Core)   │       │  (InnerTube API Engine)  │
+     └─────┬───────────────┬───────┘       └───────────┬──────────────┘
+           │               │                           │
+┌──────────▼────┐    ┌─────▼──────────────┐   ┌────────▼──────────────┐
+│   Producer    │    │   Consumer Pool     │   │   Community Feed      │
+│   Agent       │    │   (ThreadPool)      │   │                       │
+│               │    │                     │   │ • Full post history   │
+│ • Channel     │    │  ┌─Worker 1──────┐  │   │ • Poll vote splits    │
+│   expansion   │    │  │ claim_task()  │  │   │ • HD image assets     │
+│ • Playlist    │    │  │ → metadata    │  │   │ • Threaded comments   │
+│   flattening  │    │  │ → thumbnail   │  │   │ • Recursive token     │
+│ • URL/file    │    │  │ → video.mp4   │  │   │   pagination          │
+│   ingestion   │    │  │ → audio.mp3   │  │   └───────────┬───────────┘
+│ • Dedup &     │    │  │ → frames/     │  │               │
+│   enqueue     │    │  │ → transcript  │  │               ▼
+└───────┬───────┘    │  │ → comments    │  │   ┌───────────────────────┐
+        │            │  └───────────────┘  │   │ data/{channel}/       │
+        │            │  ┌─Worker 2──────┐  │   │ └── community/        │
+        │            │  │     ...        │  │   │     ├── posts.json    │
+        │            │  └───────────────┘  │   │     └── posts/        │
+        │            └─────────┬───────────┘   └───────────────────────┘
+        │                      │
+┌───────▼──────────────────────▼───────┐
+│          manifest.db (SQLite)         │
+│  WAL mode · BEGIN IMMEDIATE locking   │
+│  States: pending → in_progress → done │
+└──────────────────────────────────────┘
 ```
 
 ### Design Decisions
@@ -72,6 +70,7 @@ Designed for ML dataset construction, research corpus building, and large-scale 
 |:---|:---|
 | **SQLite with WAL + `BEGIN IMMEDIATE`** | Lock-free concurrent reads with serialized atomic task claiming. No external DB dependency. |
 | **Producer-Consumer separation** | Decouple discovery (slow, network-bound) from processing (CPU + I/O bound). Enable independent scaling. |
+| **Native InnerTube Community Engine** | Direct recursive continuation token pagination for complete community post and threaded comment trees without headless browser overhead. |
 | **Cookie pool rotation** | Round-robin across multiple Netscape cookie files to distribute request load and mitigate rate limiting. |
 | **3-tier transcript engine** | Native yt-dlp captions → HTTP fallback → Google Translate auto-translation. Maximizes caption coverage. |
 | **Pydantic schema validation** | Type-safe data contracts across pipeline stages. Guarantees JSON output consistency. |
@@ -80,19 +79,26 @@ Designed for ML dataset construction, research corpus building, and large-scale 
 
 ## Features
 
-### Data Extraction
+### Video Data Extraction
 - **Video** — Configurable quality ceiling (`144p` to `4k`) with automatic stream merging to MP4
 - **Audio** — Separate high-quality audio extraction (MP3, M4A, WAV, FLAC) via FFmpeg
 - **Frames** — Configurable frame sampling from video files (`frame_skip` parameter)
 - **Metadata** — 25+ structured fields including chapters, tags, categories, and engagement metrics
 - **Transcripts** — Multi-language captions in VTT, SRT, JSON, and clean plaintext formats
-- **Comments** — Full comment trees with nested reply hierarchies
+- **Comments** — Full video comment trees with nested reply hierarchies
 - **Thumbnails** — Maximum resolution thumbnail images
+
+### Community Tab Extraction
+- **Full Post History** — Recursive token pagination capturing 100% of community posts from day one
+- **Interactive Polls** — Multi-choice options, percentage splits, and total vote statistics
+- **HD Image Attachments** — Direct URLs to full-resolution image assets
+- **Threaded Community Comments** — Modern protobuf `commentEntityPayload` extraction with author info, timestamps, likes, and parent IDs
+- **Shared Videos** — Captures linked video attachments inside community posts
 
 ### Pipeline Engineering
 - **Atomic task queue** — SQLite-backed with `BEGIN IMMEDIATE` transaction locking for race-free parallel workers
 - **Full resumability** — Pipeline state persisted to disk; interrupted runs resume exactly where they stopped
-- **Deduplication** — Videos are never processed twice unless explicitly forced
+- **Deduplication** — Videos and posts are never processed twice unless explicitly forced
 - **Automatic retry** — Failed tasks tracked with error messages and retry counts; dedicated `retry-failed` command
 - **Cookie rotation** — Round-robin cookie file distribution across workers
 - **Rate limiting** — Configurable inter-request delays to respect platform limits
@@ -116,20 +122,30 @@ pip install -r requirements.txt
 cp config.example.yaml config.yaml
 ```
 
-### Basic Usage
+### Basic Video Scraping
 
 ```bash
 # Scrape a single video
 python main.py scrape -u "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 
-# Scrape an entire channel
+# Scrape an entire channel's videos
 python main.py scrape -c "https://www.youtube.com/@channelname" --workers 4
 
 # Scrape from a playlist
 python main.py scrape -p "https://www.youtube.com/playlist?list=PLxxxxxxx"
+```
 
-# Scrape from a file containing video URLs (one per line)
-python main.py scrape -f urls.txt --workers 4 --quality 720p
+### Scraping the Community Tab
+
+```bash
+# Scrape all community posts, polls, images, and threaded comments
+python main.py community -c "https://www.youtube.com/@channelname"
+
+# Scrape latest 50 posts with comments
+python main.py community -c "https://www.youtube.com/@channelname" --max-posts 50
+
+# Fast mode: Scrape posts only (skip comments)
+python main.py community -c "https://www.youtube.com/@channelname" --skip-comments
 ```
 
 ### Producer-Consumer Mode (Recommended for Large Jobs)
@@ -154,7 +170,7 @@ python main.py retry-failed --workers 2
 
 ## CLI Reference
 
-### `scrape` — Integrated Pipeline
+### `scrape` — Integrated Video Pipeline
 
 All-in-one command that discovers videos and processes them in a single run.
 
@@ -178,6 +194,39 @@ Options:
   --skip-download         Skip video file download
   --force                 Re-process already completed videos
   --config TEXT           Path to custom config file
+```
+
+### `community` — Community Tab Scraper
+
+Scrapes all community posts, polls, images, likes, and full threaded comment trees.
+
+```
+python main.py community [OPTIONS]
+
+Options:
+  -c, --channel TEXT              YouTube channel URL or Community URL (required)
+  --max-posts INTEGER             Maximum number of community posts to scrape
+  --extract-comments / --skip-comments
+                                  Extract comments and threaded replies (default: True)
+  --max-comments INTEGER          Maximum comments to extract per post
+  --cookies-file TEXT             Path to cookies file
+  --config TEXT                   Path to custom config file
+```
+
+```
+               Community Scrape Summary: ChannelName               
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Metric                    ┃ Value                              ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ Channel Name              │ ChannelName                        │
+│ Total Posts Found         │ 339                                │
+│ Successfully Scraped      │ 339 (100%)                         │
+│ Failed Posts              │ 0                                  │
+│ Total Comments Scraped    │ 2,924                              │
+│ Total Polls Found         │ 2                                  │
+│ Total Images Found        │ 253                                │
+│ Output Directory          │ data\ChannelName\community         │
+└───────────────────────────┴────────────────────────────────────┘
 ```
 
 ### `produce` — Producer Agent
@@ -204,21 +253,6 @@ Displays a formatted summary of pipeline progress.
 python main.py status
 ```
 
-```
-┌──────────────────────────────────────────┐
-│   YouTube Scraper Manifest Status Summary │
-├──────────────┬───────────────────────────┤
-│ Status       │ Count                     │
-├──────────────┼───────────────────────────┤
-│ Pending      │ 150                       │
-│ In_progress  │ 4                         │
-│ Done         │ 352                       │
-│ Failed       │ 7                         │
-├──────────────┼───────────────────────────┤
-│ Total        │ 513                       │
-└──────────────┴───────────────────────────┘
-```
-
 ### `retry-failed` — Retry Failures
 
 Re-processes all videos marked as `failed` in the manifest.
@@ -231,11 +265,16 @@ python main.py retry-failed --workers 2
 
 ## Output Schema
 
-Each video produces a self-contained directory with structured data:
-
 ```
 data/
-└── {channel_id}/
+└── {channel_name}/
+    ├── community/
+    │   ├── community_posts.json         # Master dataset: all posts + comments
+    │   ├── summary.json                 # Scrape execution metrics
+    │   └── posts/
+    │       └── {post_id}/
+    │           ├── post_metadata.json   # Text, poll options, HD images, likes
+    │           └── comments.json        # Threaded comments for this post
     └── {video_id}/
         ├── video/
         │   └── {video_id}.mp4           # Video stream (merged MP4)
@@ -243,7 +282,6 @@ data/
         │   └── audio.mp3                # Extracted audio track
         ├── frames/
         │   ├── frame_000001.jpg         # Sampled video frames
-        │   ├── frame_000002.jpg
         │   └── ...
         ├── metadata/
         │   ├── video_metadata.json      # Structured metadata (25+ fields)
@@ -252,9 +290,7 @@ data/
         │   ├── en.vtt                   # WebVTT captions
         │   ├── en.srt                   # SubRip captions
         │   ├── en_clean.txt             # Plain text (timestamps stripped)
-        │   ├── en.json                  # Timed segments with start/end
-        │   ├── hi.vtt                   # Hindi captions
-        │   └── hi_clean.txt
+        │   └── en.json                  # Timed segments with start/end
         ├── comments/
         │   ├── comments.json            # Flat comment records
         │   └── comments_threaded.json   # Nested reply tree hierarchy
@@ -263,34 +299,40 @@ data/
         └── status.json                  # Pipeline execution log
 ```
 
-### Metadata Fields (`video_metadata.json`)
+### Community Post Schema (`community_posts.json`)
 
 ```json
-{
-  "video_id": "dQw4w9WgXcQ",
-  "title": "Video Title",
-  "channel_id": "UCxxxxxxxxxxxxxxxxxxxxxx",
-  "channel_name": "Channel Name",
-  "upload_date": "20240115",
-  "duration": 212.0,
-  "view_count": 1500000,
-  "like_count": 85000,
-  "comment_count": 4200,
-  "tags": ["tag1", "tag2"],
-  "categories": ["Education"],
-  "language": "en",
-  "availability": "public",
-  "is_live": false,
-  "was_live": false,
-  "chapters": [
-    { "start_time": 0.0, "end_time": 60.0, "title": "Introduction" }
-  ],
-  "thumbnail_url": "https://i.ytimg.com/vi/...",
-  "available_subtitle_languages": ["en", "hi", "en-auto"],
-  "age_limit": 0,
-  "original_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-  "description": "Full video description text..."
-}
+[
+  {
+    "post_id": "UgkxhS207wZClLI9KVbY6MKUH8QHQq1prc5i",
+    "post_url": "https://www.youtube.com/post/UgkxhS207wZClLI9KVbY6MKUH8QHQq1prc5i",
+    "channel_id": "UCxxxxxxxxxxxxxxxxxxxxxx",
+    "channel_name": "Channel Name",
+    "published_time": "6 months ago",
+    "text": "What is the most important factor in investing?",
+    "likes": "146",
+    "poll": {
+      "choices": ["Fundamental Analysis (45%)", "Technical Analysis (15%)", "Right Mindset (40%)"],
+      "total_votes": "5.9K votes"
+    },
+    "images": [
+      "https://yt3.ggpht.com/..."
+    ],
+    "shared_video_id": null,
+    "comments_count": 48,
+    "comments": [
+      {
+        "comment_id": "Ugwp0uomtLsgivsvrr54AaABAg",
+        "parent_id": null,
+        "author": "TraderPro",
+        "text": "Mindset is definitely 90% of the game!",
+        "like_count": 12,
+        "published_time": "5 months ago",
+        "is_reply": false
+      }
+    ]
+  }
+]
 ```
 
 ---
@@ -311,7 +353,7 @@ log_dir: "./logs"
 
 # Performance
 workers: 2
-rate_limit_delay: 1.5       # Seconds between requests per worker
+rate_limit_delay: 2.5       # Seconds between requests per worker
 
 # Video settings
 download_video: true
@@ -324,7 +366,7 @@ audio_format: "mp3"          # mp3 | m4a | wav | flac
 
 # Frame extraction
 extract_frames: false
-frame_skip: 10               # 1 = every frame, 10 = every 10th frame
+frame_skip: 50               # 1 = every frame, 50 = every 50th frame
 
 # Content
 max_comments: null            # null = unlimited
@@ -383,14 +425,15 @@ fai/
 ├── requirements.txt         # Python dependencies
 ├── src/
 │   ├── orchestrator.py      # Producer-Consumer pipeline coordinator
+│   ├── community.py         # YouTube Community Tab, poll, image & comment scraper
 │   ├── db.py                # SQLite manifest & atomic task queue
 │   ├── metadata.py          # Video metadata & channel/playlist expander
 │   ├── downloader.py        # Video, audio, thumbnail & frame extraction
 │   ├── transcript.py        # 3-tier caption engine (native → HTTP → translate)
-│   ├── comments.py          # Comment extraction & thread tree builder
+│   ├── comments.py          # Video comment extraction & thread tree builder
 │   ├── cookies_manager.py   # Round-robin cookie file rotation
-│   ├── organizer.py         # Per-video directory structure manager
-│   ├── schemas.py           # Pydantic data models
+│   ├── organizer.py         # Directory structure & folder manager
+│   ├── schemas.py           # Pydantic data models (Video, Comment, Community)
 │   ├── config_loader.py     # YAML config + CLI override merger
 │   └── utils.py             # Video ID parser, filename sanitizer, logging
 └── tests/
@@ -411,16 +454,27 @@ fai/
 pytest -v
 ```
 
-```
-tests/test_comments.py::test_build_threaded_comments     PASSED
-tests/test_comments.py::test_save_comments               PASSED
-tests/test_cookies.py::test_cookies_manager_rotation      PASSED
-tests/test_db.py::test_manifest_db_workflow               PASSED
-tests/test_downloader.py::test_quality_format_spec        PASSED
-tests/test_organizer.py::test_folder_organizer_structure  PASSED
-tests/test_transcript.py::test_clean_subtitle_text_vtt    PASSED
-tests/test_transcript.py::test_clean_subtitle_dedup       PASSED
-tests/test_utils.py::test_extract_video_id_raw            PASSED
+---
+
+## ⚠️ Disclaimer & Best Practices
+
+This tool is intended for **research, educational, and archival purposes only**. Scraping YouTube data at scale may violate their Terms of Service. 
+
+YouTube employs anti-bot protections, rate limiting, and IP-level bans (resulting in `HTTP 403 Forbidden` or `Requested format is not available` errors).
+
+**Critical Recommendations for Production Use:**
+1. **Pacing and Delays:** Keep `rate_limit_delay` in `config.yaml` at `2.5` to `5.0` seconds to avoid triggering rapid CDN burst-rate limits.
+2. **DNS Flushing:** If connection timeouts occur against `googlevideo.com` CDN nodes, flush your local DNS (`ipconfig /flushdns`) or use Google DNS (`8.8.8.8`).
+3. **Use Cookie Rotation:** Populate `cookies/` with multiple Netscape-format cookie files for automatic round-robin rotation when scraping restricted/age-gated content.
+4. **Resumable Queues:** Always use `produce` and `consume` for large batch scraping to ensure full fault-tolerance and atomic task recovery.
+
+*The author is not responsible for any account bans, IP blocks, or legal repercussions resulting from the use of this software.*
+
+---
+
+## License
+
+MIT
 tests/test_utils.py::test_extract_video_id_standard_url   PASSED
 tests/test_utils.py::test_extract_video_id_short_url      PASSED
 tests/test_utils.py::test_extract_video_id_shorts_url     PASSED

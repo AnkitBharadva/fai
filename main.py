@@ -8,6 +8,7 @@ from rich.table import Table
 from src.config_loader import load_config, merge_config_with_cli
 from src.db import ManifestDB
 from src.orchestrator import ScrapingOrchestrator
+from src.community import CommunityExtractor
 
 console = Console()
 
@@ -179,5 +180,58 @@ def retry_failed(workers: Optional[int], config: Optional[str]):
     orchestrator.run(urls=failed_ids, workers=workers, force=True)
 
 
+@cli.command()
+@click.option("--channel", "-c", required=True, help="YouTube channel URL or Community URL.")
+@click.option("--max-posts", type=int, help="Maximum number of community posts to scrape (default: all).")
+@click.option("--extract-comments/--skip-comments", default=True, help="Extract comments and threaded replies for each post.")
+@click.option("--max-comments", type=int, help="Maximum comments to extract per post (default: all).")
+@click.option("--cookies-file", help="Path to cookies file (e.g., ./cookies/jaman.txt).")
+@click.option("--config", help="Path to custom config.yaml file.")
+def community(
+    channel: str,
+    max_posts: Optional[int],
+    extract_comments: bool,
+    max_comments: Optional[int],
+    cookies_file: Optional[str],
+    config: Optional[str],
+):
+    """Scrape channel Community Tab posts, polls, images, likes, and threaded comments."""
+    cfg = load_config(config or "config.yaml")
+    data_dir = cfg.get("data_dir", "./data")
+    cookie = cookies_file or cfg.get("cookies_file")
+
+    console.print(f"[bold cyan]Starting YouTube Community Tab Scraper for:[/bold cyan] {channel}\n")
+
+    extractor = CommunityExtractor(output_dir=data_dir, cookies_file=cookie)
+    posts, summary = extractor.scrape_channel_community(
+        channel_url=channel,
+        max_posts=max_posts,
+        extract_comments=extract_comments,
+        max_comments_per_post=max_comments,
+    )
+
+    table = Table(title=f"Community Scrape Summary: {summary.channel_name}")
+    table.add_column("Metric", style="bold cyan")
+    table.add_column("Value", style="bold green")
+
+    table.add_row("Channel Name", summary.channel_name)
+    table.add_row("Total Posts Found", str(summary.total_posts_found))
+    table.add_row("Successfully Scraped", str(summary.posts_scraped_success))
+    table.add_row("Failed Posts", str(summary.posts_scraped_failed))
+    table.add_row("Total Comments Scraped", str(summary.total_comments_extracted))
+    table.add_row("Total Polls Found", str(summary.total_polls_extracted))
+    table.add_row("Total Images Found", str(summary.total_images_extracted))
+    table.add_row("Output Directory", summary.output_dir)
+
+    console.print("\n")
+    console.print(table)
+
+    if summary.errors:
+        console.print(f"\n[bold red]Encountered {len(summary.errors)} issue(s):[/bold red]")
+        for err in summary.errors[:5]:
+            console.print(f" - {err}")
+
+
 if __name__ == "__main__":
     cli()
+
